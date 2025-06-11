@@ -5,6 +5,7 @@ import datetime
 import json
 import argparse
 import logging
+import traceback
 from picamera2 import Picamera2
 
 # Configurar logging
@@ -59,9 +60,11 @@ class TimeLapse:
     def initialize_camera(self):
         """Inicializa la cámara con la configuración adecuada"""
         try:
+            logger.info("Inicializando cámara para time-lapse...")
             self.camera = Picamera2()
             
             # Configurar resolución máxima
+            logger.info(f"Configurando resolución: {self.config['resolution']['width']}x{self.config['resolution']['height']}")
             config = self.camera.create_still_configuration(
                 main={"size": (self.config["resolution"]["width"], 
                                self.config["resolution"]["height"])}
@@ -73,6 +76,7 @@ class TimeLapse:
             return True
         except Exception as e:
             logger.error(f"Error al inicializar la cámara: {e}")
+            logger.error(traceback.format_exc())
             return False
     
     def is_time_to_capture(self):
@@ -103,22 +107,34 @@ class TimeLapse:
         
         # Crear carpeta base si no existe
         if not os.path.exists(self.config["base_folder"]):
-            os.makedirs(self.config["base_folder"])
+            try:
+                os.makedirs(self.config["base_folder"])
+                logger.info(f"Creada carpeta base: {self.config['base_folder']}")
+            except Exception as e:
+                logger.error(f"Error al crear carpeta base: {e}")
+                return False
         
         # Crear carpeta para el día actual si no existe
         day_folder = os.path.join(self.config["base_folder"], date_folder)
         if not os.path.exists(day_folder):
-            os.makedirs(day_folder)
+            try:
+                os.makedirs(day_folder)
+                logger.info(f"Creada carpeta del día: {day_folder}")
+            except Exception as e:
+                logger.error(f"Error al crear carpeta del día: {e}")
+                return False
         
         # Nombre del archivo con timestamp
         filename = os.path.join(day_folder, f"img_{timestamp}.jpg")
         
         try:
+            logger.info(f"Capturando imagen: {filename}")
             self.camera.capture_file(filename)
             logger.info(f"Imagen capturada: {filename}")
             return True
         except Exception as e:
             logger.error(f"Error al capturar imagen: {e}")
+            logger.error(traceback.format_exc())
             return False
     
     def run(self):
@@ -127,21 +143,36 @@ class TimeLapse:
         
         try:
             if not self.initialize_camera():
+                logger.error("No se pudo inicializar la cámara. Deteniendo aplicación.")
                 return
             
             logger.info(f"Configuración: Inicio {self.config['start_time']}, "
                         f"Fin {self.config['end_time']}, "
                         f"Intervalo {self.config['interval_seconds']} segundos")
             
+            # Capturar una imagen inicial para verificar que todo funciona
+            logger.info("Capturando imagen de prueba inicial...")
+            if not self.capture_image():
+                logger.error("No se pudo capturar la imagen de prueba. Deteniendo aplicación.")
+                return
+            
+            logger.info("Imagen de prueba capturada correctamente. Iniciando bucle principal.")
+            
             while True:
                 if self.is_time_to_capture():
                     self.capture_image()
+                else:
+                    logger.info("No es momento de capturar según la configuración")
                 
                 # Esperar el intervalo configurado
+                logger.info(f"Esperando {self.config['interval_seconds']} segundos para la siguiente captura")
                 time.sleep(self.config["interval_seconds"])
                 
         except KeyboardInterrupt:
             logger.info("Aplicación detenida por el usuario")
+        except Exception as e:
+            logger.error(f"Error no esperado: {e}")
+            logger.error(traceback.format_exc())
         finally:
             if self.camera:
                 self.camera.close()
@@ -152,8 +183,12 @@ def main():
     parser.add_argument("--config", default="config.json", help="Ruta al archivo de configuración")
     args = parser.parse_args()
     
-    timelapse = TimeLapse(config_file=args.config)
-    timelapse.run()
+    try:
+        timelapse = TimeLapse(config_file=args.config)
+        timelapse.run()
+    except Exception as e:
+        logger.error(f"Error al ejecutar la aplicación: {e}")
+        logger.error(traceback.format_exc())
 
 if __name__ == "__main__":
     main() 

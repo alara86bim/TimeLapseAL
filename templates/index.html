@@ -54,6 +54,25 @@
         .preview-container {
             margin-bottom: 20px;
         }
+        .log-container {
+            max-height: 300px;
+            overflow-y: auto;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 0.25rem;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 0.85rem;
+        }
+        .log-error {
+            color: #dc3545;
+        }
+        .log-info {
+            color: #0d6efd;
+        }
+        .log-warning {
+            color: #ffc107;
+        }
     </style>
 </head>
 <body>
@@ -85,6 +104,23 @@
             </div>
         </div>
 
+        <!-- Logs del Time-Lapse -->
+        <div class="row mb-3">
+            <div class="col">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h4 class="mb-0">Logs del Time-Lapse</h4>
+                        <button id="btn-refresh-logs" class="btn btn-sm btn-outline-secondary">Actualizar</button>
+                    </div>
+                    <div class="card-body">
+                        <div id="log-container" class="log-container">
+                            <p>Cargando logs...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Vista Previa en Tiempo Real -->
         <div class="row mb-3">
             <div class="col">
@@ -98,7 +134,7 @@
                     </div>
                     <div class="card-body text-center">
                         <div class="preview-container">
-                            <img id="live-preview" class="mb-3 d-none" src="/video_feed" alt="Vista previa en vivo">
+                            <img id="live-preview" class="mb-3 d-none" src="#" alt="Vista previa en vivo">
                             <div id="preview-placeholder" class="alert alert-info">
                                 Haga clic en "Iniciar Vista Previa" para ver la cámara en tiempo real
                             </div>
@@ -251,6 +287,14 @@
             const previewPlaceholder = document.getElementById('preview-placeholder');
             const previewStatusText = document.getElementById('preview-status-text');
             const previewStatusIndicator = document.getElementById('preview-status-indicator');
+            
+            // Elementos de logs
+            const logContainer = document.getElementById('log-container');
+            const refreshLogsBtn = document.getElementById('btn-refresh-logs');
+            
+            // Variables para control de la vista previa
+            let previewActive = false;
+            let previewInterval = null;
 
             // Cargar configuración inicial
             loadConfig();
@@ -261,6 +305,9 @@
             // Cargar lista de fechas con imágenes
             loadDates();
             
+            // Cargar logs iniciales
+            loadLogs();
+            
             // Configurar intervalos para actualizaciones
             setInterval(checkStatus, 5000);
             setInterval(loadDates, 30000);
@@ -270,6 +317,7 @@
             stopBtn.addEventListener('click', stopTimelapse);
             configForm.addEventListener('submit', saveConfig);
             dateSelect.addEventListener('change', loadImagesForDate);
+            refreshLogsBtn.addEventListener('click', loadLogs);
             
             // Event listeners para vista previa
             startPreviewBtn.addEventListener('click', startPreview);
@@ -355,6 +403,9 @@
                             statusIndicator.className = 'status-indicator status-running';
                             startBtn.disabled = true;
                             stopBtn.disabled = false;
+                            
+                            // Actualizar logs automáticamente si está en ejecución
+                            loadLogs();
                         } else {
                             statusText.textContent = 'Detenido';
                             statusIndicator.className = 'status-indicator status-stopped';
@@ -362,21 +413,10 @@
                             stopBtn.disabled = true;
                         }
                         
-                        // Estado de la vista previa
-                        if (data.preview_active) {
-                            previewStatusText.textContent = 'Activa';
-                            previewStatusIndicator.className = 'status-indicator status-running';
-                            startPreviewBtn.disabled = true;
-                            stopPreviewBtn.disabled = false;
-                            livePreview.classList.remove('d-none');
-                            previewPlaceholder.classList.add('d-none');
-                        } else {
-                            previewStatusText.textContent = 'Detenida';
-                            previewStatusIndicator.className = 'status-indicator status-stopped';
-                            startPreviewBtn.disabled = false;
-                            stopPreviewBtn.disabled = true;
-                            livePreview.classList.add('d-none');
-                            previewPlaceholder.classList.remove('d-none');
+                        // Actualizar estado de la vista previa según el servidor
+                        if (data.preview_active !== previewActive) {
+                            previewActive = data.preview_active;
+                            updatePreviewUI();
                         }
                     })
                     .catch(error => {
@@ -392,6 +432,9 @@
                     .then(data => {
                         if (data.success) {
                             checkStatus();
+                            
+                            // Cargar logs después de iniciar
+                            setTimeout(loadLogs, 1000);
                         } else {
                             alert('Error al iniciar time-lapse: ' + data.message);
                         }
@@ -408,6 +451,9 @@
                     .then(data => {
                         if (data.success) {
                             checkStatus();
+                            
+                            // Cargar logs después de detener
+                            setTimeout(loadLogs, 1000);
                         } else {
                             alert('Error al detener time-lapse: ' + data.message);
                         }
@@ -418,21 +464,92 @@
                     });
             }
             
+            function loadLogs() {
+                fetch('/api/logs?lines=50')
+                    .then(response => response.json())
+                    .then(data => {
+                        const html = [];
+                        
+                        // Procesar logs del timelapse
+                        if (data.timelapse_logs && data.timelapse_logs.length > 0) {
+                            html.push('<h5>TimeLapse:</h5>');
+                            data.timelapse_logs.forEach(log => {
+                                let cssClass = '';
+                                if (log.includes('ERROR')) cssClass = 'log-error';
+                                else if (log.includes('INFO')) cssClass = 'log-info';
+                                else if (log.includes('WARNING')) cssClass = 'log-warning';
+                                
+                                html.push(`<div class="${cssClass}">${log}</div>`);
+                            });
+                        } else {
+                            html.push('<p>No hay logs del time-lapse disponibles.</p>');
+                        }
+                        
+                        logContainer.innerHTML = html.join('');
+                        
+                        // Scroll al final
+                        logContainer.scrollTop = logContainer.scrollHeight;
+                    })
+                    .catch(error => {
+                        console.error('Error al cargar logs:', error);
+                        logContainer.innerHTML = '<p class="log-error">Error al cargar logs: ' + error + '</p>';
+                    });
+            }
+            
+            function updatePreviewImage() {
+                if (!previewActive) return;
+                
+                fetch('/api/preview/image')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success && data.image) {
+                            livePreview.src = 'data:image/jpeg;base64,' + data.image;
+                            livePreview.classList.remove('d-none');
+                            previewPlaceholder.classList.add('d-none');
+                        } else {
+                            console.error('Error al obtener imagen de vista previa:', data.message);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error al obtener imagen de vista previa:', error);
+                    });
+            }
+            
+            function updatePreviewUI() {
+                if (previewActive) {
+                    previewStatusText.textContent = 'Activa';
+                    previewStatusIndicator.className = 'status-indicator status-running';
+                    startPreviewBtn.disabled = true;
+                    stopPreviewBtn.disabled = false;
+                    
+                    // Iniciar actualización periódica si no está activa
+                    if (!previewInterval) {
+                        updatePreviewImage(); // Actualizar inmediatamente
+                        previewInterval = setInterval(updatePreviewImage, 1000); // Actualizar cada segundo
+                    }
+                } else {
+                    previewStatusText.textContent = 'Detenida';
+                    previewStatusIndicator.className = 'status-indicator status-stopped';
+                    startPreviewBtn.disabled = false;
+                    stopPreviewBtn.disabled = true;
+                    livePreview.classList.add('d-none');
+                    previewPlaceholder.classList.remove('d-none');
+                    
+                    // Detener actualización periódica
+                    if (previewInterval) {
+                        clearInterval(previewInterval);
+                        previewInterval = null;
+                    }
+                }
+            }
+            
             function startPreview() {
                 fetch('/api/preview/start', { method: 'POST' })
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            // Actualizar interfaz
-                            previewStatusText.textContent = 'Activa';
-                            previewStatusIndicator.className = 'status-indicator status-running';
-                            startPreviewBtn.disabled = true;
-                            stopPreviewBtn.disabled = false;
-                            livePreview.classList.remove('d-none');
-                            previewPlaceholder.classList.add('d-none');
-                            
-                            // Recargar la imagen de vista previa
-                            livePreview.src = '/video_feed?t=' + new Date().getTime();
+                            previewActive = true;
+                            updatePreviewUI();
                         } else {
                             alert('Error al iniciar vista previa: ' + data.message);
                         }
@@ -448,13 +565,8 @@
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            // Actualizar interfaz
-                            previewStatusText.textContent = 'Detenida';
-                            previewStatusIndicator.className = 'status-indicator status-stopped';
-                            startPreviewBtn.disabled = false;
-                            stopPreviewBtn.disabled = true;
-                            livePreview.classList.add('d-none');
-                            previewPlaceholder.classList.remove('d-none');
+                            previewActive = false;
+                            updatePreviewUI();
                         } else {
                             alert('Error al detener vista previa: ' + data.message);
                         }

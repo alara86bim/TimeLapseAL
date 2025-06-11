@@ -7,6 +7,7 @@ import logging
 import time
 import io
 import threading
+import base64
 from flask import Flask, request, render_template, jsonify, send_from_directory, Response
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
@@ -31,6 +32,9 @@ camera_lock = threading.Lock()
 preview_active = False
 preview_thread = None
 stop_preview = threading.Event()
+latest_preview_image = None
+timelapse_log_thread = None
+stop_log_thread = threading.Event()
 
 def load_config():
     """Carga la configuración desde el archivo JSON"""
@@ -69,21 +73,76 @@ def save_config(config):
         logger.error(f"Error al guardar configuración: {e}")
         return False
 
+def read_timelapse_output(process):
+    """Lee la salida del proceso de time-lapse y la registra en el log"""
+    while not stop_log_thread.is_set() and process and process.poll() is None:
+        try:
+            # Leer la salida estándar
+            stdout_line = process.stdout.readline().decode('utf-8').strip()
+            if stdout_line:
+                logger.info(f"TimeLapse: {stdout_line}")
+            
+            # Leer la salida de error
+            stderr_line = process.stderr.readline().decode('utf-8').strip()
+            if stderr_line:
+                logger.error(f"TimeLapse Error: {stderr_line}")
+            
+            # Si no hay salida, esperar un poco
+            if not stdout_line and not stderr_line:
+                time.sleep(0.1)
+        except Exception as e:
+            logger.error(f"Error al leer la salida del proceso: {e}")
+            time.sleep(0.5)
+    
+    # Comprobar si el proceso terminó
+    if process and process.poll() is not None:
+        return_code = process.poll()
+        logger.info(f"Proceso de time-lapse terminó con código: {return_code}")
+        
+        # Leer cualquier salida restante
+        remaining_stdout = process.stdout.read().decode('utf-8').strip()
+        if remaining_stdout:
+            for line in remaining_stdout.split('\n'):
+                logger.info(f"TimeLapse: {line}")
+        
+        remaining_stderr = process.stderr.read().decode('utf-8').strip()
+        if remaining_stderr:
+            for line in remaining_stderr.split('\n'):
+                logger.error(f"TimeLapse Error: {line}")
+
 def start_timelapse():
     """Inicia el proceso de time-lapse"""
-    global timelapse_process
+    global timelapse_process, timelapse_log_thread, stop_log_thread
     
     if timelapse_process and timelapse_process.poll() is None:
         logger.info("El proceso de time-lapse ya está en ejecución")
         return True
     
     try:
+        # Detener el hilo de log anterior si existe
+        stop_log_thread.set()
+        if timelapse_log_thread and timelapse_log_thread.is_alive():
+            timelapse_log_thread.join(timeout=2)
+        
+        # Reiniciar el flag para el nuevo hilo
+        stop_log_thread.clear()
+        
+        # Iniciar el proceso con pipes para capturar la salida
         timelapse_process = subprocess.Popen(
             ["python3", "timelapse.py", "--config", config_file],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stderr=subprocess.PIPE,
+            bufsize=1,  # Line buffered
+            universal_newlines=False  # Necesario para no bloquear
         )
+        
         logger.info(f"Proceso de time-lapse iniciado con PID {timelapse_process.pid}")
+        
+        # Iniciar hilo para leer la salida
+        timelapse_log_thread = threading.Thread(target=read_timelapse_output, args=(timelapse_process,))
+        timelapse_log_thread.daemon = True
+        timelapse_log_thread.start()
+        
         return True
     except Exception as e:
         logger.error(f"Error al iniciar el proceso de time-lapse: {e}")
@@ -91,13 +150,17 @@ def start_timelapse():
 
 def stop_timelapse():
     """Detiene el proceso de time-lapse"""
-    global timelapse_process
+    global timelapse_process, stop_log_thread
     
     if not timelapse_process or timelapse_process.poll() is not None:
         logger.info("No hay proceso de time-lapse en ejecución")
         return True
     
     try:
+        # Detener el hilo de lectura de logs
+        stop_log_thread.set()
+        
+        # Enviar señal de interrupción
         timelapse_process.send_signal(signal.SIGINT)
         timelapse_process.wait(timeout=5)
         logger.info("Proceso de time-lapse detenido")
@@ -127,6 +190,7 @@ def initialize_camera(for_preview=True):
         camera = None
 
     try:
+        logger.info("Inicializando cámara...")
         camera = Picamera2()
         config = load_config()
         
@@ -152,6 +216,24 @@ def initialize_camera(for_preview=True):
     except Exception as e:
         logger.error(f"Error al inicializar la cámara: {e}")
         return False
+
+def capture_preview_image():
+    """Captura una imagen de vista previa"""
+    global camera, latest_preview_image
+    
+    if not camera:
+        if not initialize_camera(for_preview=True):
+            return None
+    
+    try:
+        output = io.BytesIO()
+        camera.capture_file(output, format='jpeg')
+        latest_preview_image = base64.b64encode(output.getvalue()).decode('utf-8')
+        output.close()
+        return latest_preview_image
+    except Exception as e:
+        logger.error(f"Error al capturar imagen de vista previa: {e}")
+        return None
 
 def generate_frames():
     """Genera frames para el streaming de video en tiempo real"""
@@ -197,11 +279,17 @@ def preview_manager():
         # Inicializar la cámara si no está inicializada
         with camera_lock:
             if not camera:
-                initialize_camera(for_preview=True)
+                if not initialize_camera(for_preview=True):
+                    logger.error("No se pudo inicializar la cámara para vista previa")
+                    preview_active = False
+                    return
         
-        # Esperar hasta que se detenga la vista previa
+        # Capturar imágenes mientras la vista previa esté activa
         while not stop_preview.is_set():
+            with camera_lock:
+                capture_preview_image()
             time.sleep(0.5)
+            
     except Exception as e:
         logger.error(f"Error en preview_manager: {e}")
     finally:
@@ -316,6 +404,24 @@ def video_feed():
     return Response(generate_frames(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
+@app.route('/api/preview/image', methods=['GET'])
+def get_preview_image():
+    """Devuelve la última imagen de vista previa como base64"""
+    global latest_preview_image
+    
+    # Si no hay imagen de vista previa o la vista previa no está activa, capturar una nueva
+    if not latest_preview_image or not preview_active:
+        with camera_lock:
+            if not preview_active:
+                if not initialize_camera(for_preview=True):
+                    return jsonify({"success": False, "message": "Error al inicializar la cámara"}), 500
+            capture_preview_image()
+    
+    if latest_preview_image:
+        return jsonify({"success": True, "image": latest_preview_image})
+    else:
+        return jsonify({"success": False, "message": "No se pudo obtener la imagen de vista previa"}), 500
+
 @app.route('/api/preview/start', methods=['POST'])
 def start_preview():
     """Inicia la vista previa en tiempo real"""
@@ -335,7 +441,14 @@ def start_preview():
     preview_thread.daemon = True
     preview_thread.start()
     
-    return jsonify({"success": True, "message": "Vista previa iniciada correctamente"})
+    # Esperar un momento para asegurarse de que la vista previa se inicie
+    time.sleep(1)
+    
+    # Verificar si se inició correctamente
+    if preview_active:
+        return jsonify({"success": True, "message": "Vista previa iniciada correctamente"})
+    else:
+        return jsonify({"success": False, "message": "Error al iniciar vista previa"}), 500
 
 @app.route('/api/preview/stop', methods=['POST'])
 def stop_preview():
@@ -346,12 +459,41 @@ def stop_preview():
     
     return jsonify({"success": True, "message": "Vista previa detenida correctamente"})
 
+@app.route('/api/logs', methods=['GET'])
+def get_logs():
+    """Obtiene los últimos logs de la aplicación"""
+    num_lines = request.args.get('lines', default=50, type=int)
+    
+    try:
+        # Leer logs del timelapse
+        timelapse_logs = []
+        if os.path.exists('timelapse.log'):
+            with open('timelapse.log', 'r') as f:
+                timelapse_logs = f.readlines()
+                timelapse_logs = timelapse_logs[-num_lines:] if len(timelapse_logs) > num_lines else timelapse_logs
+        
+        # Leer logs de la webapp
+        webapp_logs = []
+        if os.path.exists('webapp.log'):
+            with open('webapp.log', 'r') as f:
+                webapp_logs = f.readlines()
+                webapp_logs = webapp_logs[-num_lines:] if len(webapp_logs) > num_lines else webapp_logs
+        
+        return jsonify({
+            "timelapse_logs": timelapse_logs,
+            "webapp_logs": webapp_logs
+        })
+    except Exception as e:
+        logger.error(f"Error al leer logs: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @app.teardown_appcontext
 def shutdown_session(exception=None):
     """Limpia los recursos al cerrar la aplicación"""
-    global camera, stop_preview
+    global camera, stop_preview, stop_log_thread
     
     stop_preview.set()
+    stop_log_thread.set()
     
     with camera_lock:
         if camera:
