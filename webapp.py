@@ -734,7 +734,7 @@ def start_photo_timelapse():
     })
 
 @app.route('/api/photo/timelapse/stop', methods=['POST'])
-def stop_photo_timelapse():
+def api_stop_photo_timelapse():
     """Detiene la captura de fotos a intervalos"""
     global photo_timelapse_active, stop_photo_timelapse
     
