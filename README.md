@@ -10,6 +10,7 @@ Esta aplicación permite configurar y controlar capturas time-lapse usando Raspb
 - Organización automática de imágenes por día
 - Interfaz web para configuración y visualización de imágenes
 - Captura a máxima resolución (9152 x 6944 para Arducam 64MP)
+- Vista previa en tiempo real para ajustar la orientación de la cámara
 
 ## Requisitos
 
@@ -54,6 +55,19 @@ Esto iniciará la aplicación web en el puerto 8080. Puedes acceder a ella desde
 ```
 http://dirección-ip-raspberry:8080
 ```
+
+### Vista Previa en Tiempo Real
+
+La aplicación incluye una función de vista previa en tiempo real que te permite:
+
+- Ver lo que la cámara está capturando en este momento
+- Ajustar la orientación y posición de la cámara antes de iniciar el time-lapse
+- Comprobar el campo de visión y el enfoque
+
+Para usar esta función:
+1. Haz clic en "Iniciar Vista Previa" en la sección "Vista Previa en Tiempo Real"
+2. Ajusta la posición de la cámara según sea necesario
+3. Haz clic en "Detener Vista Previa" cuando hayas terminado
 
 ### Configuración
 
@@ -125,6 +139,14 @@ Si hay errores al guardar imágenes, asegúrate de que el usuario tenga permisos
 ```bash
 sudo chown -R pi:pi /ruta/a/carpeta/destino
 ```
+
+### Problemas con la vista previa en tiempo real
+
+Si la vista previa no funciona correctamente:
+
+1. Asegúrate de que ningún otro proceso esté utilizando la cámara
+2. Reinicia la aplicación web
+3. Verifica que tu navegador soporte streaming MJPEG
 
 ## Licencia
 

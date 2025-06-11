@@ -7,5 +7,9 @@
     "resolution": {
         "width": 9152,
         "height": 6944
+    },
+    "preview_resolution": {
+        "width": 1280,
+        "height": 720
     }
 } 

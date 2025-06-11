@@ -43,6 +43,17 @@
         .image-thumbnail:hover {
             border-color: #007bff;
         }
+        #live-preview {
+            width: 100%;
+            max-width: 800px;
+            height: auto;
+            border: 1px solid #ddd;
+            margin: 0 auto;
+            display: block;
+        }
+        .preview-container {
+            margin-bottom: 20px;
+        }
     </style>
 </head>
 <body>
@@ -68,6 +79,36 @@
                         <div class="d-flex justify-content-center">
                             <button id="btn-start" class="btn btn-success me-2">Iniciar Time-Lapse</button>
                             <button id="btn-stop" class="btn btn-danger">Detener Time-Lapse</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Vista Previa en Tiempo Real -->
+        <div class="row mb-3">
+            <div class="col">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h4 class="mb-0">Vista Previa en Tiempo Real</h4>
+                        <div>
+                            <span id="preview-status-text">Detenido</span>
+                            <span id="preview-status-indicator" class="status-indicator status-stopped"></span>
+                        </div>
+                    </div>
+                    <div class="card-body text-center">
+                        <div class="preview-container">
+                            <img id="live-preview" class="mb-3 d-none" src="/video_feed" alt="Vista previa en vivo">
+                            <div id="preview-placeholder" class="alert alert-info">
+                                Haga clic en "Iniciar Vista Previa" para ver la cámara en tiempo real
+                            </div>
+                        </div>
+                        <div class="d-flex justify-content-center">
+                            <button id="btn-start-preview" class="btn btn-primary me-2">Iniciar Vista Previa</button>
+                            <button id="btn-stop-preview" class="btn btn-secondary" disabled>Detener Vista Previa</button>
+                        </div>
+                        <div class="mt-3">
+                            <p class="text-muted">Use esta vista previa para ajustar la posición y orientación de la cámara</p>
                         </div>
                     </div>
                 </div>
@@ -202,6 +243,14 @@
             const dateSelect = document.getElementById('date-select');
             const imagePreview = document.getElementById('image-preview');
             const imageThumbnails = document.getElementById('image-thumbnails');
+            
+            // Elementos de la vista previa
+            const startPreviewBtn = document.getElementById('btn-start-preview');
+            const stopPreviewBtn = document.getElementById('btn-stop-preview');
+            const livePreview = document.getElementById('live-preview');
+            const previewPlaceholder = document.getElementById('preview-placeholder');
+            const previewStatusText = document.getElementById('preview-status-text');
+            const previewStatusIndicator = document.getElementById('preview-status-indicator');
 
             // Cargar configuración inicial
             loadConfig();
@@ -221,6 +270,10 @@
             stopBtn.addEventListener('click', stopTimelapse);
             configForm.addEventListener('submit', saveConfig);
             dateSelect.addEventListener('change', loadImagesForDate);
+            
+            // Event listeners para vista previa
+            startPreviewBtn.addEventListener('click', startPreview);
+            stopPreviewBtn.addEventListener('click', stopPreview);
             
             // Funciones
             function loadConfig() {
@@ -263,6 +316,10 @@
                     resolution: {
                         width: parseInt(resolutionWidthInput.value),
                         height: parseInt(resolutionHeightInput.value)
+                    },
+                    preview_resolution: {
+                        width: 1280,
+                        height: 720
                     }
                 };
                 
@@ -292,6 +349,7 @@
                 fetch('/api/status')
                     .then(response => response.json())
                     .then(data => {
+                        // Estado del time-lapse
                         if (data.running) {
                             statusText.textContent = 'En ejecución';
                             statusIndicator.className = 'status-indicator status-running';
@@ -302,6 +360,23 @@
                             statusIndicator.className = 'status-indicator status-stopped';
                             startBtn.disabled = false;
                             stopBtn.disabled = true;
+                        }
+                        
+                        // Estado de la vista previa
+                        if (data.preview_active) {
+                            previewStatusText.textContent = 'Activa';
+                            previewStatusIndicator.className = 'status-indicator status-running';
+                            startPreviewBtn.disabled = true;
+                            stopPreviewBtn.disabled = false;
+                            livePreview.classList.remove('d-none');
+                            previewPlaceholder.classList.add('d-none');
+                        } else {
+                            previewStatusText.textContent = 'Detenida';
+                            previewStatusIndicator.className = 'status-indicator status-stopped';
+                            startPreviewBtn.disabled = false;
+                            stopPreviewBtn.disabled = true;
+                            livePreview.classList.add('d-none');
+                            previewPlaceholder.classList.remove('d-none');
                         }
                     })
                     .catch(error => {
@@ -340,6 +415,53 @@
                     .catch(error => {
                         console.error('Error al detener time-lapse:', error);
                         alert('Error al detener time-lapse');
+                    });
+            }
+            
+            function startPreview() {
+                fetch('/api/preview/start', { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            // Actualizar interfaz
+                            previewStatusText.textContent = 'Activa';
+                            previewStatusIndicator.className = 'status-indicator status-running';
+                            startPreviewBtn.disabled = true;
+                            stopPreviewBtn.disabled = false;
+                            livePreview.classList.remove('d-none');
+                            previewPlaceholder.classList.add('d-none');
+                            
+                            // Recargar la imagen de vista previa
+                            livePreview.src = '/video_feed?t=' + new Date().getTime();
+                        } else {
+                            alert('Error al iniciar vista previa: ' + data.message);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error al iniciar vista previa:', error);
+                        alert('Error al iniciar vista previa');
+                    });
+            }
+            
+            function stopPreview() {
+                fetch('/api/preview/stop', { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            // Actualizar interfaz
+                            previewStatusText.textContent = 'Detenida';
+                            previewStatusIndicator.className = 'status-indicator status-stopped';
+                            startPreviewBtn.disabled = false;
+                            stopPreviewBtn.disabled = true;
+                            livePreview.classList.add('d-none');
+                            previewPlaceholder.classList.remove('d-none');
+                        } else {
+                            alert('Error al detener vista previa: ' + data.message);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error al detener vista previa:', error);
+                        alert('Error al detener vista previa');
                     });
             }
             
