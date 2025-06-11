@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Time-Lapse Raspberry Pi</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 20px;
+            padding-bottom: 20px;
+        }
+        .day-checkbox {
+            margin-right: 15px;
+        }
+        .status-indicator {
+            width: 15px;
+            height: 15px;
+            display: inline-block;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .status-running {
+            background-color: #28a745;
+        }
+        .status-stopped {
+            background-color: #dc3545;
+        }
+        .image-preview {
+            max-width: 100%;
+            height: auto;
+            margin-bottom: 15px;
+        }
+        .image-thumbnail {
+            cursor: pointer;
+            border: 1px solid #ddd;
+            padding: 2px;
+            margin: 2px;
+            width: 100px;
+            height: 75px;
+            object-fit: cover;
+        }
+        .image-thumbnail:hover {
+            border-color: #007bff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="row mb-4">
+            <div class="col">
+                <h1 class="text-center">Control de Time-Lapse para Raspberry Pi</h1>
+                <p class="text-center">Configura y controla la captura de imágenes time-lapse con tu Arducam 64MP</p>
+            </div>
+        </div>
+
+        <div class="row mb-3">
+            <div class="col">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h4 class="mb-0">Estado</h4>
+                        <div>
+                            <span id="status-text">Cargando...</span>
+                            <span id="status-indicator" class="status-indicator"></span>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex justify-content-center">
+                            <button id="btn-start" class="btn btn-success me-2">Iniciar Time-Lapse</button>
+                            <button id="btn-stop" class="btn btn-danger">Detener Time-Lapse</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mb-3">
+            <div class="col">
+                <div class="card">
+                    <div class="card-header">
+                        <h4>Configuración</h4>
+                    </div>
+                    <div class="card-body">
+                        <form id="config-form">
+                            <div class="row mb-3">
+                                <div class="col-md-6">
+                                    <label for="start-time" class="form-label">Hora de Inicio:</label>
+                                    <input type="time" class="form-control" id="start-time" required>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="end-time" class="form-label">Hora de Finalización:</label>
+                                    <input type="time" class="form-control" id="end-time" required>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">Días Activos:</label>
+                                <div class="d-flex flex-wrap">
+                                    <div class="day-checkbox">
+                                        <input type="checkbox" class="form-check-input" id="day-0" value="0">
+                                        <label class="form-check-label" for="day-0">Lunes</label>
+                                    </div>
+                                    <div class="day-checkbox">
+                                        <input type="checkbox" class="form-check-input" id="day-1" value="1">
+                                        <label class="form-check-label" for="day-1">Martes</label>
+                                    </div>
+                                    <div class="day-checkbox">
+                                        <input type="checkbox" class="form-check-input" id="day-2" value="2">
+                                        <label class="form-check-label" for="day-2">Miércoles</label>
+                                    </div>
+                                    <div class="day-checkbox">
+                                        <input type="checkbox" class="form-check-input" id="day-3" value="3">
+                                        <label class="form-check-label" for="day-3">Jueves</label>
+                                    </div>
+                                    <div class="day-checkbox">
+                                        <input type="checkbox" class="form-check-input" id="day-4" value="4">
+                                        <label class="form-check-label" for="day-4">Viernes</label>
+                                    </div>
+                                    <div class="day-checkbox">
+                                        <input type="checkbox" class="form-check-input" id="day-5" value="5">
+                                        <label class="form-check-label" for="day-5">Sábado</label>
+                                    </div>
+                                    <div class="day-checkbox">
+                                        <input type="checkbox" class="form-check-input" id="day-6" value="6">
+                                        <label class="form-check-label" for="day-6">Domingo</label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="interval" class="form-label">Intervalo (segundos):</label>
+                                <input type="number" class="form-control" id="interval" min="1" required>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="base-folder" class="form-label">Carpeta para Imágenes:</label>
+                                <input type="text" class="form-control" id="base-folder" required>
+                            </div>
+
+                            <div class="row mb-3">
+                                <div class="col-md-6">
+                                    <label for="resolution-width" class="form-label">Resolución - Ancho (px):</label>
+                                    <input type="number" class="form-control" id="resolution-width" min="1" required>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="resolution-height" class="form-label">Resolución - Alto (px):</label>
+                                    <input type="number" class="form-control" id="resolution-height" min="1" required>
+                                </div>
+                            </div>
+
+                            <div class="text-center">
+                                <button type="submit" class="btn btn-primary">Guardar Configuración</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col">
+                <div class="card">
+                    <div class="card-header">
+                        <h4>Imágenes Capturadas</h4>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="date-select" class="form-label">Selecciona una fecha:</label>
+                            <select class="form-select" id="date-select">
+                                <option value="">Cargando fechas...</option>
+                            </select>
+                        </div>
+                        
+                        <div id="image-preview-container" class="text-center mb-3">
+                            <img id="image-preview" class="image-preview d-none" alt="Vista previa">
+                        </div>
+                        
+                        <div id="image-thumbnails" class="d-flex flex-wrap justify-content-center">
+                            <!-- Las miniaturas se cargarán aquí -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Referencias a elementos DOM
+            const startBtn = document.getElementById('btn-start');
+            const stopBtn = document.getElementById('btn-stop');
+            const statusText = document.getElementById('status-text');
+            const statusIndicator = document.getElementById('status-indicator');
+            const configForm = document.getElementById('config-form');
+            const startTimeInput = document.getElementById('start-time');
+            const endTimeInput = document.getElementById('end-time');
+            const intervalInput = document.getElementById('interval');
+            const baseFolderInput = document.getElementById('base-folder');
+            const resolutionWidthInput = document.getElementById('resolution-width');
+            const resolutionHeightInput = document.getElementById('resolution-height');
+            const dateSelect = document.getElementById('date-select');
+            const imagePreview = document.getElementById('image-preview');
+            const imageThumbnails = document.getElementById('image-thumbnails');
+
+            // Cargar configuración inicial
+            loadConfig();
+            
+            // Comprobar estado del time-lapse
+            checkStatus();
+            
+            // Cargar lista de fechas con imágenes
+            loadDates();
+            
+            // Configurar intervalos para actualizaciones
+            setInterval(checkStatus, 5000);
+            setInterval(loadDates, 30000);
+            
+            // Event listeners
+            startBtn.addEventListener('click', startTimelapse);
+            stopBtn.addEventListener('click', stopTimelapse);
+            configForm.addEventListener('submit', saveConfig);
+            dateSelect.addEventListener('change', loadImagesForDate);
+            
+            // Funciones
+            function loadConfig() {
+                fetch('/api/config')
+                    .then(response => response.json())
+                    .then(config => {
+                        startTimeInput.value = config.start_time;
+                        endTimeInput.value = config.end_time;
+                        intervalInput.value = config.interval_seconds;
+                        baseFolderInput.value = config.base_folder;
+                        resolutionWidthInput.value = config.resolution.width;
+                        resolutionHeightInput.value = config.resolution.height;
+                        
+                        // Marcar los días activos
+                        config.active_days.forEach(day => {
+                            document.getElementById(`day-${day}`).checked = true;
+                        });
+                    })
+                    .catch(error => console.error('Error al cargar configuración:', error));
+            }
+            
+            function saveConfig(e) {
+                e.preventDefault();
+                
+                // Obtener días activos
+                const activeDays = [];
+                for (let i = 0; i < 7; i++) {
+                    if (document.getElementById(`day-${i}`).checked) {
+                        activeDays.push(i);
+                    }
+                }
+                
+                // Crear objeto de configuración
+                const config = {
+                    start_time: startTimeInput.value,
+                    end_time: endTimeInput.value,
+                    active_days: activeDays,
+                    interval_seconds: parseInt(intervalInput.value),
+                    base_folder: baseFolderInput.value,
+                    resolution: {
+                        width: parseInt(resolutionWidthInput.value),
+                        height: parseInt(resolutionHeightInput.value)
+                    }
+                };
+                
+                // Enviar configuración al servidor
+                fetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(config)
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('Configuración guardada correctamente');
+                    } else {
+                        alert('Error al guardar configuración: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error al guardar configuración:', error);
+                    alert('Error al guardar configuración');
+                });
+            }
+            
+            function checkStatus() {
+                fetch('/api/status')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.running) {
+                            statusText.textContent = 'En ejecución';
+                            statusIndicator.className = 'status-indicator status-running';
+                            startBtn.disabled = true;
+                            stopBtn.disabled = false;
+                        } else {
+                            statusText.textContent = 'Detenido';
+                            statusIndicator.className = 'status-indicator status-stopped';
+                            startBtn.disabled = false;
+                            stopBtn.disabled = true;
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error al verificar estado:', error);
+                        statusText.textContent = 'Error';
+                        statusIndicator.className = 'status-indicator status-stopped';
+                    });
+            }
+            
+            function startTimelapse() {
+                fetch('/api/start', { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            checkStatus();
+                        } else {
+                            alert('Error al iniciar time-lapse: ' + data.message);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error al iniciar time-lapse:', error);
+                        alert('Error al iniciar time-lapse');
+                    });
+            }
+            
+            function stopTimelapse() {
+                fetch('/api/stop', { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            checkStatus();
+                        } else {
+                            alert('Error al detener time-lapse: ' + data.message);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error al detener time-lapse:', error);
+                        alert('Error al detener time-lapse');
+                    });
+            }
+            
+            function loadDates() {
+                fetch('/images')
+                    .then(response => response.json())
+                    .then(data => {
+                        // Guardar fecha seleccionada actual
+                        const currentSelectedDate = dateSelect.value;
+                        
+                        // Limpiar select
+                        dateSelect.innerHTML = '';
+                        
+                        // Añadir opción por defecto
+                        const defaultOption = document.createElement('option');
+                        defaultOption.value = '';
+                        defaultOption.textContent = 'Selecciona una fecha';
+                        dateSelect.appendChild(defaultOption);
+                        
+                        // Añadir fechas
+                        if (data.folders && data.folders.length > 0) {
+                            data.folders.forEach(folder => {
+                                const option = document.createElement('option');
+                                option.value = folder;
+                                option.textContent = folder;
+                                dateSelect.appendChild(option);
+                            });
+                            
+                            // Mantener la selección anterior si existe
+                            if (currentSelectedDate && data.folders.includes(currentSelectedDate)) {
+                                dateSelect.value = currentSelectedDate;
+                                loadImagesForDate();
+                            } else {
+                                // Si no hay selección o ya no existe, seleccionar la primera fecha
+                                dateSelect.value = data.folders[0];
+                                loadImagesForDate();
+                            }
+                        } else {
+                            imageThumbnails.innerHTML = '<p class="text-center">No hay imágenes disponibles</p>';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error al cargar fechas:', error);
+                    });
+            }
+            
+            function loadImagesForDate() {
+                const selectedDate = dateSelect.value;
+                
+                if (!selectedDate) {
+                    imageThumbnails.innerHTML = '';
+                    imagePreview.classList.add('d-none');
+                    return;
+                }
+                
+                fetch(`/images/${selectedDate}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        imageThumbnails.innerHTML = '';
+                        
+                        if (data.images && data.images.length > 0) {
+                            data.images.forEach(image => {
+                                const thumbnail = document.createElement('img');
+                                thumbnail.src = `/images/${selectedDate}/${image}`;
+                                thumbnail.alt = image;
+                                thumbnail.className = 'image-thumbnail';
+                                thumbnail.addEventListener('click', () => {
+                                    imagePreview.src = `/images/${selectedDate}/${image}`;
+                                    imagePreview.classList.remove('d-none');
+                                });
+                                imageThumbnails.appendChild(thumbnail);
+                            });
+                            
+                            // Mostrar la primera imagen como vista previa
+                            imagePreview.src = `/images/${selectedDate}/${data.images[0]}`;
+                            imagePreview.classList.remove('d-none');
+                        } else {
+                            imageThumbnails.innerHTML = '<p class="text-center">No hay imágenes para esta fecha</p>';
+                            imagePreview.classList.add('d-none');
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error al cargar imágenes:', error);
+                    });
+            }
+        });
+    </script>
+</body>
+</html> 
