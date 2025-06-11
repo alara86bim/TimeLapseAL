@@ -12,7 +12,6 @@ from flask import Flask, request, render_template, jsonify, send_from_directory,
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
 from picamera2.outputs import FileOutput
-from picamera2.transforms import Transform
 import datetime
 
 # Configurar logging
@@ -37,6 +36,11 @@ stop_preview_event = threading.Event()
 latest_preview_image = None
 timelapse_log_thread = None
 stop_log_thread = threading.Event()
+
+# Variables para el modo foto con intervalos
+photo_timelapse_active = False
+photo_timelapse_thread = None
+stop_photo_timelapse = threading.Event()
 
 # Constantes para resoluciones predefinidas
 RESOLUTION_PRESETS = {
@@ -69,6 +73,12 @@ def load_config():
         "preview_resolution": {
             "width": 640,
             "height": 480
+        },
+        "photo_timelapse": {
+            "enabled": False,
+            "interval_seconds": 30,
+            "duration_minutes": 60,
+            "prefix": "PHOTO_TL"
         }
     }
 
@@ -569,7 +579,7 @@ def capture_photo():
     
     return jsonify(result)
 
-def capture_single_photo():
+def capture_single_photo(prefix="PHOTO"):
     """Captura una foto única de alta calidad"""
     try:
         logger.info("Inicializando cámara para captura fotográfica única...")
@@ -583,8 +593,7 @@ def capture_single_photo():
         
         # Configuración específica para fotografía de alta calidad
         still_config = photo_camera.create_still_configuration(
-            main={"size": (width, height)},
-            transform=Transform(hflip=False, vflip=False)
+            main={"size": (width, height)}
         )
         photo_camera.configure(still_config)
         photo_camera.start()
@@ -608,14 +617,14 @@ def capture_single_photo():
             
         # Contar imágenes existentes
         try:
-            existing_images = [f for f in os.listdir(day_folder) if f.startswith('PHOTO_')]
+            existing_images = [f for f in os.listdir(day_folder) if f.startswith(prefix)]
             image_count = len(existing_images) + 1
         except Exception as e:
             logger.error(f"Error al contar imágenes existentes: {e}")
             image_count = 1
             
         # Generar nombre de archivo
-        filename = os.path.join(day_folder, f"PHOTO_{timestamp}_{image_count:03d}.jpg")
+        filename = os.path.join(day_folder, f"{prefix}_{timestamp}_{image_count:03d}.jpg")
         
         # Capturar imagen con máxima calidad
         photo_camera.capture_file(filename)
@@ -629,20 +638,168 @@ def capture_single_photo():
     except Exception as e:
         logger.error(f"Error al capturar foto: {e}")
         try:
-            if photo_camera:
+            if 'photo_camera' in locals() and photo_camera:
                 photo_camera.stop()
                 photo_camera.close()
         except:
             pass
         return {"success": False, "error": str(e)}
 
+def photo_timelapse_worker():
+    """Función para capturar fotos a intervalos como un timelapse"""
+    global photo_timelapse_active
+    
+    config = load_config()
+    photo_config = config.get("photo_timelapse", {})
+    interval = photo_config.get("interval_seconds", 30)
+    duration = photo_config.get("duration_minutes", 60) * 60  # Convertir a segundos
+    prefix = photo_config.get("prefix", "PHOTO_TL")
+    
+    logger.info(f"Iniciando timelapse fotográfico: intervalo {interval}s, duración {duration/60}min")
+    
+    start_time = time.time()
+    next_capture = start_time
+    
+    while not stop_photo_timelapse.is_set():
+        current_time = time.time()
+        
+        # Verificar si se ha completado la duración
+        if duration > 0 and (current_time - start_time) > duration:
+            logger.info(f"Timelapse fotográfico completado después de {duration/60} minutos")
+            break
+            
+        # Capturar imagen cuando sea el momento
+        if current_time >= next_capture:
+            # Detener vista previa temporalmente si está activa
+            was_preview_active = preview_active
+            if was_preview_active:
+                stop_preview_route()
+                time.sleep(0.5)
+            
+            # Capturar foto
+            result = capture_single_photo(prefix=prefix)
+            
+            # Reiniciar vista previa si estaba activa
+            if was_preview_active:
+                start_preview()
+                
+            if result["success"]:
+                logger.info(f"Imagen de timelapse fotográfico capturada: {result['filename']}")
+            else:
+                logger.error(f"Error en timelapse fotográfico: {result.get('error', 'Error desconocido')}")
+                
+            # Programar próxima captura
+            next_capture = time.time() + interval
+        
+        # Pequeña pausa para evitar uso excesivo de CPU
+        time.sleep(0.1)
+    
+    photo_timelapse_active = False
+    logger.info("Timelapse fotográfico detenido")
+    
+@app.route('/api/photo/timelapse/start', methods=['POST'])
+def start_photo_timelapse():
+    """Inicia la captura de fotos a intervalos"""
+    global photo_timelapse_active, photo_timelapse_thread, stop_photo_timelapse
+    
+    if photo_timelapse_active:
+        return jsonify({"success": False, "message": "El timelapse fotográfico ya está activo"})
+    
+    # Actualizar configuración si se proporcionan parámetros
+    if request.json:
+        config = load_config()
+        if "interval_seconds" in request.json:
+            config["photo_timelapse"]["interval_seconds"] = int(request.json["interval_seconds"])
+        if "duration_minutes" in request.json:
+            config["photo_timelapse"]["duration_minutes"] = int(request.json["duration_minutes"])
+        if "prefix" in request.json:
+            config["photo_timelapse"]["prefix"] = request.json["prefix"]
+        config["photo_timelapse"]["enabled"] = True
+        save_config(config)
+    
+    # Reiniciar el evento de parada
+    stop_photo_timelapse.clear()
+    
+    # Iniciar el hilo de timelapse fotográfico
+    photo_timelapse_thread = threading.Thread(target=photo_timelapse_worker)
+    photo_timelapse_thread.daemon = True
+    photo_timelapse_thread.start()
+    
+    photo_timelapse_active = True
+    
+    return jsonify({
+        "success": True, 
+        "message": "Timelapse fotográfico iniciado",
+        "config": load_config()["photo_timelapse"]
+    })
+
+@app.route('/api/photo/timelapse/stop', methods=['POST'])
+def stop_photo_timelapse():
+    """Detiene la captura de fotos a intervalos"""
+    global photo_timelapse_active, stop_photo_timelapse
+    
+    if not photo_timelapse_active:
+        return jsonify({"success": False, "message": "El timelapse fotográfico no está activo"})
+    
+    # Señalizar al hilo que debe detenerse
+    stop_photo_timelapse.set()
+    
+    # Esperar a que el hilo termine
+    if photo_timelapse_thread and photo_timelapse_thread.is_alive():
+        photo_timelapse_thread.join(timeout=2)
+    
+    # Actualizar configuración
+    config = load_config()
+    config["photo_timelapse"]["enabled"] = False
+    save_config(config)
+    
+    return jsonify({"success": True, "message": "Timelapse fotográfico detenido"})
+
+@app.route('/api/photo/timelapse/status', methods=['GET'])
+def photo_timelapse_status():
+    """Devuelve el estado actual del timelapse fotográfico"""
+    config = load_config()
+    
+    return jsonify({
+        "active": photo_timelapse_active,
+        "config": config["photo_timelapse"]
+    })
+
+@app.route('/api/photo/timelapse/config', methods=['POST'])
+def update_photo_timelapse_config():
+    """Actualiza la configuración del timelapse fotográfico"""
+    if not request.json:
+        return jsonify({"success": False, "message": "No se proporcionaron datos de configuración"})
+    
+    config = load_config()
+    
+    # Actualizar configuración
+    if "interval_seconds" in request.json:
+        config["photo_timelapse"]["interval_seconds"] = int(request.json["interval_seconds"])
+    if "duration_minutes" in request.json:
+        config["photo_timelapse"]["duration_minutes"] = int(request.json["duration_minutes"])
+    if "prefix" in request.json:
+        config["photo_timelapse"]["prefix"] = request.json["prefix"]
+    if "enabled" in request.json:
+        config["photo_timelapse"]["enabled"] = bool(request.json["enabled"])
+    
+    if save_config(config):
+        return jsonify({
+            "success": True, 
+            "message": "Configuración de timelapse fotográfico actualizada",
+            "config": config["photo_timelapse"]
+        })
+    else:
+        return jsonify({"success": False, "message": "Error al guardar la configuración"})
+
 @app.teardown_appcontext
 def shutdown_session(exception=None):
     """Limpia los recursos al cerrar la aplicación"""
-    global camera, stop_preview_event, stop_log_thread
+    global camera, stop_preview_event, stop_log_thread, stop_photo_timelapse
     
     stop_preview_event.set()
     stop_log_thread.set()
+    stop_photo_timelapse.set()
     
     with camera_lock:
         if camera:
