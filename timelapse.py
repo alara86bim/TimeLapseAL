@@ -115,7 +115,7 @@ class TimeLapse:
         
         now = datetime.datetime.now()
         date_folder = now.strftime("%Y-%m-%d")
-        timestamp = now.strftime("%H-%M-%S")
+        timestamp = now.strftime("%Y%m%d_%H%M%S")
         
         # Crear carpeta base si no existe
         if not os.path.exists(self.config["base_folder"]):
@@ -136,8 +136,16 @@ class TimeLapse:
                 logger.error(f"Error al crear carpeta del día: {e}")
                 return False
         
-        # Nombre del archivo con timestamp
-        filename = os.path.join(day_folder, f"img_{timestamp}.jpg")
+        # Obtener el número de imágenes actuales en la carpeta para el contador secuencial
+        try:
+            existing_images = [f for f in os.listdir(day_folder) if f.startswith('TL_')]
+            image_count = len(existing_images) + 1
+        except Exception as e:
+            logger.error(f"Error al contar imágenes existentes: {e}")
+            image_count = 1
+        
+        # Nombre del archivo con formato TL_YYYYMMDD_HHMMSS_001.jpg
+        filename = os.path.join(day_folder, f"TL_{timestamp}_{image_count:03d}.jpg")
         
         try:
             logger.info(f"Capturando imagen: {filename}")
@@ -179,26 +187,37 @@ class TimeLapse:
             
             logger.info("Imagen de prueba capturada correctamente. Iniciando bucle principal.")
             
+            # Controlar los tiempos para respetar estrictamente el intervalo configurado
+            next_capture_time = time.time()
+            
             while True:
+                # Esperar hasta el próximo momento de captura
+                current_time = time.time()
+                if current_time < next_capture_time:
+                    # Aún no es tiempo de capturar, esperar un poco
+                    sleep_time = min(1.0, next_capture_time - current_time)
+                    time.sleep(sleep_time)
+                    continue
+                
+                # Es tiempo de capturar
                 if self.is_time_to_capture():
                     logger.info("Capturando imagen programada...")
-                    self.capture_image()
+                    capture_successful = self.capture_image()
+                    if capture_successful:
+                        # Programar la próxima captura a exactamente el intervalo desde ahora
+                        next_capture_time = time.time() + self.config["interval_seconds"]
+                        logger.info(f"Próxima captura programada en {self.config['interval_seconds']} segundos")
+                    else:
+                        # Si falló, intentar nuevamente después de un breve retraso
+                        next_capture_time = time.time() + 5
+                        logger.info("Reintentando captura en 5 segundos debido a un error")
                 else:
                     logger.info("No es momento de capturar según la configuración")
+                    # Comprobar nuevamente en un minuto
+                    next_capture_time = time.time() + 60
                 
-                # Esperar el intervalo configurado
-                interval = self.config["interval_seconds"]
-                logger.info(f"Esperando {interval} segundos para la siguiente captura")
-                
-                # Dividir la espera en intervalos más pequeños para responder mejor a Ctrl+C
-                for _ in range(min(60, interval)):
-                    time.sleep(1)
-                    if interval <= 60:
-                        break
-                
-                remaining = max(0, interval - 60)
-                if remaining > 0:
-                    time.sleep(remaining)
+                # Breve pausa para permitir interrupciones
+                time.sleep(0.1)
                 
         except KeyboardInterrupt:
             logger.info("Aplicación detenida por el usuario")

@@ -12,6 +12,8 @@ from flask import Flask, request, render_template, jsonify, send_from_directory,
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
 from picamera2.outputs import FileOutput
+from picamera2.transforms import Transform
+import datetime
 
 # Configurar logging
 logging.basicConfig(
@@ -230,19 +232,21 @@ def initialize_camera(for_preview=True):
             # Usar una resolución más baja para la vista previa
             preview_width = config["preview_resolution"]["width"]
             preview_height = config["preview_resolution"]["height"]
-            logger.info(f"Configurando vista previa: {preview_width}x{preview_height}")
+            logger.info(f"Configurando vista previa: {preview_width}x{preview_height} a 60 FPS")
             
-            # Configuración para vista previa
+            # Configuración para vista previa con alto FPS
             try:
-                preview_config = camera.create_preview_configuration(
-                    main={"size": (preview_width, preview_height)}
+                preview_config = camera.create_video_configuration(
+                    main={"size": (preview_width, preview_height), "format": "XRGB8888"},
+                    controls={"FrameRate": 60.0, "NoiseReductionMode": 0}
                 )
                 camera.configure(preview_config)
             except Exception as e:
                 logger.error(f"Error con resolución de vista previa {preview_width}x{preview_height}: {e}")
                 # Usar una resolución más baja si falla
-                preview_config = camera.create_preview_configuration(
-                    main={"size": (640, 480)}
+                preview_config = camera.create_video_configuration(
+                    main={"size": (640, 480), "format": "XRGB8888"},
+                    controls={"FrameRate": 60.0, "NoiseReductionMode": 0}
                 )
                 camera.configure(preview_config)
         else:
@@ -309,8 +313,8 @@ def generate_frames():
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
             
-            # Control de velocidad de frames
-            time.sleep(0.1)
+            # Control de velocidad de frames - reducir para permitir que la cámara capture a mayor velocidad
+            time.sleep(0.01)  # Aproximadamente 100 FPS máximo (limitado por la cámara)
     except Exception as e:
         logger.error(f"Error en streaming de video: {e}")
     finally:
@@ -343,7 +347,7 @@ def preview_manager():
         while not stop_preview_event.is_set():
             with camera_lock:
                 capture_preview_image()
-            time.sleep(0.5)
+            time.sleep(0.1)  # Actualizar más rápido (10 veces por segundo)
             
     except Exception as e:
         logger.error(f"Error en preview_manager: {e}")
@@ -546,6 +550,91 @@ def get_logs():
     except Exception as e:
         logger.error(f"Error al leer logs: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/photo/capture', methods=['POST'])
+def capture_photo():
+    """Captura una fotografía única de alta calidad"""
+    # Detener vista previa temporalmente si está activa
+    was_preview_active = preview_active
+    if was_preview_active:
+        stop_preview_route()
+        time.sleep(1)  # Dar tiempo a que se libere la cámara
+    
+    # Capturar la foto
+    result = capture_single_photo()
+    
+    # Reiniciar vista previa si estaba activa
+    if was_preview_active:
+        start_preview()
+    
+    return jsonify(result)
+
+def capture_single_photo():
+    """Captura una foto única de alta calidad"""
+    try:
+        logger.info("Inicializando cámara para captura fotográfica única...")
+        photo_camera = Picamera2()
+        config = load_config()
+        
+        # Usar la resolución configurada para captura
+        width = config["resolution"]["width"]
+        height = config["resolution"]["height"]
+        logger.info(f"Configurando captura fotográfica: {width}x{height}")
+        
+        # Configuración específica para fotografía de alta calidad
+        still_config = photo_camera.create_still_configuration(
+            main={"size": (width, height)},
+            transform=Transform(hflip=False, vflip=False)
+        )
+        photo_camera.configure(still_config)
+        photo_camera.start()
+        
+        # Esperar para que la exposición automática se estabilice
+        time.sleep(2)
+        
+        # Crear nombre de archivo
+        now = datetime.datetime.now()
+        date_folder = now.strftime("%Y-%m-%d")
+        timestamp = now.strftime("%Y%m%d_%H%M%S")
+        
+        # Asegurar que existe la carpeta
+        base_folder = config["base_folder"]
+        if not os.path.exists(base_folder):
+            os.makedirs(base_folder)
+        
+        day_folder = os.path.join(base_folder, date_folder)
+        if not os.path.exists(day_folder):
+            os.makedirs(day_folder)
+            
+        # Contar imágenes existentes
+        try:
+            existing_images = [f for f in os.listdir(day_folder) if f.startswith('PHOTO_')]
+            image_count = len(existing_images) + 1
+        except Exception as e:
+            logger.error(f"Error al contar imágenes existentes: {e}")
+            image_count = 1
+            
+        # Generar nombre de archivo
+        filename = os.path.join(day_folder, f"PHOTO_{timestamp}_{image_count:03d}.jpg")
+        
+        # Capturar imagen con máxima calidad
+        photo_camera.capture_file(filename)
+        logger.info(f"Foto capturada: {filename}")
+        
+        # Cerrar la cámara
+        photo_camera.stop()
+        photo_camera.close()
+        
+        return {"success": True, "filename": filename, "path": f"/images/{date_folder}/{os.path.basename(filename)}"}
+    except Exception as e:
+        logger.error(f"Error al capturar foto: {e}")
+        try:
+            if photo_camera:
+                photo_camera.stop()
+                photo_camera.close()
+        except:
+            pass
+        return {"success": False, "error": str(e)}
 
 @app.teardown_appcontext
 def shutdown_session(exception=None):
