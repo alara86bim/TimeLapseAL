@@ -31,7 +31,7 @@ camera = None
 camera_lock = threading.Lock()
 preview_active = False
 preview_thread = None
-stop_preview = threading.Event()
+stop_preview_event = threading.Event()
 latest_preview_image = None
 timelapse_log_thread = None
 stop_log_thread = threading.Event()
@@ -237,14 +237,14 @@ def capture_preview_image():
 
 def generate_frames():
     """Genera frames para el streaming de video en tiempo real"""
-    global camera, stop_preview
+    global camera, stop_preview_event
     
     with camera_lock:
         if not camera and not initialize_camera(for_preview=True):
             return
     
     try:
-        while not stop_preview.is_set():
+        while not stop_preview_event.is_set():
             output = io.BytesIO()
             with camera_lock:
                 camera.capture_file(output, format='jpeg')
@@ -270,9 +270,9 @@ def generate_frames():
 
 def preview_manager():
     """Gestiona el hilo de vista previa"""
-    global preview_active, stop_preview, camera
+    global preview_active, stop_preview_event, camera
     
-    stop_preview.clear()
+    stop_preview_event.clear()
     preview_active = True
     
     try:
@@ -285,7 +285,7 @@ def preview_manager():
                     return
         
         # Capturar imágenes mientras la vista previa esté activa
-        while not stop_preview.is_set():
+        while not stop_preview_event.is_set():
             with camera_lock:
                 capture_preview_image()
             time.sleep(0.5)
@@ -425,18 +425,18 @@ def get_preview_image():
 @app.route('/api/preview/start', methods=['POST'])
 def start_preview():
     """Inicia la vista previa en tiempo real"""
-    global preview_thread, preview_active, stop_preview
+    global preview_thread, preview_active, stop_preview_event
     
     if preview_active:
         return jsonify({"success": True, "message": "Vista previa ya está activa"})
     
     # Detener la vista previa si está activa
-    stop_preview.set()
+    stop_preview_event.set()
     if preview_thread and preview_thread.is_alive():
         preview_thread.join(timeout=5)
     
     # Iniciar nuevo hilo de vista previa
-    stop_preview.clear()
+    stop_preview_event.clear()
     preview_thread = threading.Thread(target=preview_manager)
     preview_thread.daemon = True
     preview_thread.start()
@@ -451,11 +451,11 @@ def start_preview():
         return jsonify({"success": False, "message": "Error al iniciar vista previa"}), 500
 
 @app.route('/api/preview/stop', methods=['POST'])
-def stop_preview():
+def stop_preview_route():
     """Detiene la vista previa en tiempo real"""
-    global stop_preview
+    global stop_preview_event
     
-    stop_preview.set()
+    stop_preview_event.set()
     
     return jsonify({"success": True, "message": "Vista previa detenida correctamente"})
 
@@ -490,9 +490,9 @@ def get_logs():
 @app.teardown_appcontext
 def shutdown_session(exception=None):
     """Limpia los recursos al cerrar la aplicación"""
-    global camera, stop_preview, stop_log_thread
+    global camera, stop_preview_event, stop_log_thread
     
-    stop_preview.set()
+    stop_preview_event.set()
     stop_log_thread.set()
     
     with camera_lock:
