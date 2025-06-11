@@ -214,15 +214,34 @@
                                 <input type="text" class="form-control" id="base-folder" required>
                             </div>
 
-                            <div class="row mb-3">
+                            <div class="mb-3">
+                                <label for="resolution-preset" class="form-label">Resolución:</label>
+                                <select class="form-select" id="resolution-preset">
+                                    <option value="custom">Personalizada</option>
+                                    <option value="720p">HD (1280x720)</option>
+                                    <option value="1080p">Full HD (1920x1080)</option>
+                                    <option value="4K">4K (3840x2160)</option>
+                                    <option value="max">Máxima (9152x6944)</option>
+                                </select>
+                            </div>
+
+                            <div class="row mb-3" id="custom-resolution">
                                 <div class="col-md-6">
                                     <label for="resolution-width" class="form-label">Resolución - Ancho (px):</label>
-                                    <input type="number" class="form-control" id="resolution-width" min="1" required>
+                                    <input type="number" class="form-control" id="resolution-width" min="640" max="9152" required>
                                 </div>
                                 <div class="col-md-6">
                                     <label for="resolution-height" class="form-label">Resolución - Alto (px):</label>
-                                    <input type="number" class="form-control" id="resolution-height" min="1" required>
+                                    <input type="number" class="form-control" id="resolution-height" min="480" max="6944" required>
                                 </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="preview-resolution-preset" class="form-label">Resolución de Vista Previa:</label>
+                                <select class="form-select" id="preview-resolution-preset">
+                                    <option value="vga">VGA (640x480)</option>
+                                    <option value="hd">HD (1280x720)</option>
+                                </select>
                             </div>
 
                             <div class="text-center">
@@ -274,8 +293,11 @@
             const endTimeInput = document.getElementById('end-time');
             const intervalInput = document.getElementById('interval');
             const baseFolderInput = document.getElementById('base-folder');
+            const resolutionPresetSelect = document.getElementById('resolution-preset');
             const resolutionWidthInput = document.getElementById('resolution-width');
             const resolutionHeightInput = document.getElementById('resolution-height');
+            const customResolutionDiv = document.getElementById('custom-resolution');
+            const previewResolutionSelect = document.getElementById('preview-resolution-preset');
             const dateSelect = document.getElementById('date-select');
             const imagePreview = document.getElementById('image-preview');
             const imageThumbnails = document.getElementById('image-thumbnails');
@@ -295,6 +317,20 @@
             // Variables para control de la vista previa
             let previewActive = false;
             let previewInterval = null;
+            
+            // Resoluciones predefinidas
+            const resolutionPresets = {
+                "720p": {"width": 1280, "height": 720},
+                "1080p": {"width": 1920, "height": 1080},
+                "4K": {"width": 3840, "height": 2160},
+                "max": {"width": 9152, "height": 6944}
+            };
+            
+            // Resoluciones de vista previa
+            const previewResolutions = {
+                "vga": {"width": 640, "height": 480},
+                "hd": {"width": 1280, "height": 720}
+            };
 
             // Cargar configuración inicial
             loadConfig();
@@ -323,6 +359,21 @@
             startPreviewBtn.addEventListener('click', startPreview);
             stopPreviewBtn.addEventListener('click', stopPreview);
             
+            // Event listener para cambiar la resolución predefinida
+            resolutionPresetSelect.addEventListener('change', function() {
+                const selectedPreset = resolutionPresetSelect.value;
+                if (selectedPreset === "custom") {
+                    customResolutionDiv.style.display = "flex";
+                } else {
+                    customResolutionDiv.style.display = "none";
+                    const preset = resolutionPresets[selectedPreset];
+                    if (preset) {
+                        resolutionWidthInput.value = preset.width;
+                        resolutionHeightInput.value = preset.height;
+                    }
+                }
+            });
+            
             // Funciones
             function loadConfig() {
                 fetch('/api/config')
@@ -339,6 +390,32 @@
                         config.active_days.forEach(day => {
                             document.getElementById(`day-${day}`).checked = true;
                         });
+                        
+                        // Seleccionar la resolución predefinida adecuada
+                        let foundPreset = false;
+                        for (const [preset, resolution] of Object.entries(resolutionPresets)) {
+                            if (resolution.width === config.resolution.width && 
+                                resolution.height === config.resolution.height) {
+                                resolutionPresetSelect.value = preset;
+                                customResolutionDiv.style.display = "none";
+                                foundPreset = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!foundPreset) {
+                            resolutionPresetSelect.value = "custom";
+                            customResolutionDiv.style.display = "flex";
+                        }
+                        
+                        // Seleccionar la resolución de vista previa adecuada
+                        for (const [preset, resolution] of Object.entries(previewResolutions)) {
+                            if (resolution.width === config.preview_resolution.width && 
+                                resolution.height === config.preview_resolution.height) {
+                                previewResolutionSelect.value = preset;
+                                break;
+                            }
+                        }
                     })
                     .catch(error => console.error('Error al cargar configuración:', error));
             }
@@ -354,6 +431,10 @@
                     }
                 }
                 
+                // Obtener resolución de vista previa
+                const previewResolutionKey = previewResolutionSelect.value;
+                const previewResolution = previewResolutions[previewResolutionKey] || previewResolutions.vga;
+                
                 // Crear objeto de configuración
                 const config = {
                     start_time: startTimeInput.value,
@@ -366,8 +447,8 @@
                         height: parseInt(resolutionHeightInput.value)
                     },
                     preview_resolution: {
-                        width: 1280,
-                        height: 720
+                        width: previewResolution.width,
+                        height: previewResolution.height
                     }
                 };
                 

@@ -36,6 +36,14 @@ latest_preview_image = None
 timelapse_log_thread = None
 stop_log_thread = threading.Event()
 
+# Constantes para resoluciones predefinidas
+RESOLUTION_PRESETS = {
+    "720p": {"width": 1280, "height": 720},
+    "1080p": {"width": 1920, "height": 1080},
+    "4K": {"width": 3840, "height": 2160},
+    "max": {"width": 9152, "height": 6944}  # Máxima para Arducam 64MP
+}
+
 def load_config():
     """Carga la configuración desde el archivo JSON"""
     if os.path.exists(config_file):
@@ -53,12 +61,12 @@ def load_config():
         "interval_seconds": 60,
         "base_folder": "timelapse_images",
         "resolution": {
-            "width": 9152,
-            "height": 6944
+            "width": 1920,
+            "height": 1080
         },
         "preview_resolution": {
-            "width": 1280,
-            "height": 720
+            "width": 640,
+            "height": 480
         }
     }
 
@@ -77,18 +85,34 @@ def read_timelapse_output(process):
     """Lee la salida del proceso de time-lapse y la registra en el log"""
     while not stop_log_thread.is_set() and process and process.poll() is None:
         try:
-            # Leer la salida estándar
-            stdout_line = process.stdout.readline().decode('utf-8').strip()
-            if stdout_line:
-                logger.info(f"TimeLapse: {stdout_line}")
+            # Leer la salida estándar byte a byte
+            stdout_bytes = b''
+            while True:
+                byte = process.stdout.read(1)
+                if byte == b'' or byte == b'\n':
+                    break
+                stdout_bytes += byte
             
-            # Leer la salida de error
-            stderr_line = process.stderr.readline().decode('utf-8').strip()
-            if stderr_line:
-                logger.error(f"TimeLapse Error: {stderr_line}")
+            if stdout_bytes:
+                stdout_line = stdout_bytes.decode('utf-8', errors='replace').strip()
+                if stdout_line:
+                    logger.info(f"TimeLapse: {stdout_line}")
+            
+            # Leer la salida de error byte a byte
+            stderr_bytes = b''
+            while True:
+                byte = process.stderr.read(1)
+                if byte == b'' or byte == b'\n':
+                    break
+                stderr_bytes += byte
+            
+            if stderr_bytes:
+                stderr_line = stderr_bytes.decode('utf-8', errors='replace').strip()
+                if stderr_line:
+                    logger.error(f"TimeLapse Error: {stderr_line}")
             
             # Si no hay salida, esperar un poco
-            if not stdout_line and not stderr_line:
+            if not stdout_bytes and not stderr_bytes:
                 time.sleep(0.1)
         except Exception as e:
             logger.error(f"Error al leer la salida del proceso: {e}")
@@ -100,15 +124,22 @@ def read_timelapse_output(process):
         logger.info(f"Proceso de time-lapse terminó con código: {return_code}")
         
         # Leer cualquier salida restante
-        remaining_stdout = process.stdout.read().decode('utf-8').strip()
-        if remaining_stdout:
-            for line in remaining_stdout.split('\n'):
-                logger.info(f"TimeLapse: {line}")
-        
-        remaining_stderr = process.stderr.read().decode('utf-8').strip()
-        if remaining_stderr:
-            for line in remaining_stderr.split('\n'):
-                logger.error(f"TimeLapse Error: {line}")
+        try:
+            remaining_stdout = process.stdout.read()
+            if remaining_stdout:
+                remaining_stdout_str = remaining_stdout.decode('utf-8', errors='replace').strip()
+                for line in remaining_stdout_str.split('\n'):
+                    if line.strip():
+                        logger.info(f"TimeLapse: {line}")
+            
+            remaining_stderr = process.stderr.read()
+            if remaining_stderr:
+                remaining_stderr_str = remaining_stderr.decode('utf-8', errors='replace').strip()
+                for line in remaining_stderr_str.split('\n'):
+                    if line.strip():
+                        logger.error(f"TimeLapse Error: {line}")
+        except Exception as e:
+            logger.error(f"Error al leer la salida restante: {e}")
 
 def start_timelapse():
     """Inicia el proceso de time-lapse"""
@@ -128,12 +159,13 @@ def start_timelapse():
         stop_log_thread.clear()
         
         # Iniciar el proceso con pipes para capturar la salida
+        # No usamos buffering=1 para evitar advertencias
         timelapse_process = subprocess.Popen(
             ["python3", "timelapse.py", "--config", config_file],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=1,  # Line buffered
-            universal_newlines=False  # Necesario para no bloquear
+            bufsize=0,  # Sin buffering
+            universal_newlines=False
         )
         
         logger.info(f"Proceso de time-lapse iniciado con PID {timelapse_process.pid}")
@@ -196,18 +228,41 @@ def initialize_camera(for_preview=True):
         
         if for_preview:
             # Usar una resolución más baja para la vista previa
-            preview_config = camera.create_preview_configuration(
-                main={"size": (config["preview_resolution"]["width"], 
-                              config["preview_resolution"]["height"])}
-            )
-            camera.configure(preview_config)
+            preview_width = config["preview_resolution"]["width"]
+            preview_height = config["preview_resolution"]["height"]
+            logger.info(f"Configurando vista previa: {preview_width}x{preview_height}")
+            
+            # Configuración para vista previa
+            try:
+                preview_config = camera.create_preview_configuration(
+                    main={"size": (preview_width, preview_height)}
+                )
+                camera.configure(preview_config)
+            except Exception as e:
+                logger.error(f"Error con resolución de vista previa {preview_width}x{preview_height}: {e}")
+                # Usar una resolución más baja si falla
+                preview_config = camera.create_preview_configuration(
+                    main={"size": (640, 480)}
+                )
+                camera.configure(preview_config)
         else:
-            # Usar la resolución completa para captura
-            still_config = camera.create_still_configuration(
-                main={"size": (config["resolution"]["width"], 
-                              config["resolution"]["height"])}
-            )
-            camera.configure(still_config)
+            # Usar la resolución configurada para captura
+            width = config["resolution"]["width"]
+            height = config["resolution"]["height"]
+            logger.info(f"Configurando captura: {width}x{height}")
+            
+            try:
+                still_config = camera.create_still_configuration(
+                    main={"size": (width, height)}
+                )
+                camera.configure(still_config)
+            except Exception as e:
+                logger.error(f"Error con resolución de captura {width}x{height}: {e}")
+                # Usar una resolución más baja si falla
+                still_config = camera.create_still_configuration(
+                    main={"size": (1920, 1080)}
+                )
+                camera.configure(still_config)
             
         camera.start()
         time.sleep(2)  # Dar tiempo a que la cámara se inicialice
@@ -311,7 +366,7 @@ def preview_manager():
 def index():
     """Página principal"""
     config = load_config()
-    return render_template('index.html', config=config)
+    return render_template('index.html', config=config, resolution_presets=RESOLUTION_PRESETS)
 
 @app.route('/api/config', methods=['GET'])
 def get_config():
@@ -330,6 +385,11 @@ def update_config():
     except Exception as e:
         logger.error(f"Error al actualizar configuración: {e}")
         return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/resolution/presets', methods=['GET'])
+def get_resolution_presets():
+    """Obtiene las resoluciones predefinidas"""
+    return jsonify(RESOLUTION_PRESETS)
 
 @app.route('/api/start', methods=['POST'])
 def api_start_timelapse():
